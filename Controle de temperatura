@@ -1,0 +1,142 @@
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <Adafruit_SSD1306.h>
+#include <Adafruit_GFX.h>
+
+// Definindo os pinos
+#define DHTPIN 2           // Pino para o sensor DHT22
+#define DHTTYPE DHT22      // Tipo de sensor DHT
+#define DHT_GND_PIN 7      // Pino para controlar o GND do DHT22
+#define RELAY_PIN 8        // Pino do relé
+#define POT_PIN A2         // Pino do potenciômetro
+#define COOLER_PIN 10      // Pino para controlar o Gate do MOSFET (e, consequentemente, o cooler)
+#define SCREEN_WIDTH 128   // Largura do display OLED
+#define SCREEN_HEIGHT 32   // Altura do display OLED
+#define OLED_RESET    -1   // Reset do OLED
+#define OLED_ADDRESS 0x3C  // Endereço do display OLED (pode ser 0x3C ou 0x3D dependendo do seu display)
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+DHT dht(DHTPIN, DHTTYPE);
+
+float temperature = 0.0;
+float humidity = 0.0;
+int setTemperature = 30; // Temperatura inicial
+unsigned long lastPotAdjustTime = 0; 
+const unsigned long idleTime = 10000; // Tempo de inatividade (10 segundos)
+
+bool showTemperature = true; // Controle para alternar entre temperatura e umidade
+unsigned long lastToggleTime = 0; // Última vez que alternou a exibição
+const unsigned long toggleInterval = 5000; // Intervalo de alternância (5 segundos)
+
+unsigned long lastDHTPowerCycle = 0; // Controle para reinicializar o DHT
+const unsigned long powerCycleInterval = 15 * 60 * 1000; // Intervalo de 15 minutos
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(DHT_GND_PIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(COOLER_PIN, OUTPUT); // Pino do MOSFET para controlar o cooler
+
+  // Inicializa o DHT22
+  digitalWrite(DHT_GND_PIN, LOW); // Liga o GND do sensor
+  dht.begin();
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
+    Serial.println(F("Erro ao inicializar o display OLED"));
+    while (true);
+  }
+
+  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(COOLER_PIN, LOW); // Garante que o cooler esteja desligado inicialmente
+
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.print("Aquecedor");
+  display.display();
+  delay(2000);
+}
+
+void loop() {
+  static unsigned long lastDHTReadTime = 0;
+
+  // Reinicializa o DHT22 a cada 15 minutos, estou tendo problemas em longas durações onde ocorre um erro e sou obrigado a reiniciar manualmente o dht22.
+  if (millis() - lastDHTPowerCycle >= powerCycleInterval) {
+    digitalWrite(DHT_GND_PIN, HIGH); // Desliga o GND do sensor
+    delay(1000);                      // Aguarda 1 segundo
+    digitalWrite(DHT_GND_PIN, LOW);  // Liga o GND do sensor
+    delay(2000);                      // Aguarda o sensor reiniciar
+    dht.begin();
+    lastDHTPowerCycle = millis();
+  }
+
+  // Leitura do DHT22
+  if (millis() - lastDHTReadTime >= 2000) {
+    temperature = dht.readTemperature();
+    humidity = dht.readHumidity();
+    if (isnan(temperature) || isnan(humidity)) {
+      Serial.println("Falha ao ler o sensor DHT22");
+    }
+    lastDHTReadTime = millis();
+  }
+
+  int potValue = analogRead(POT_PIN);
+
+  if (potValue <= 255) {
+    setTemperature = -1;
+    digitalWrite(RELAY_PIN, LOW);
+    digitalWrite(COOLER_PIN, LOW); // Desliga o cooler
+  } else {
+    setTemperature = map(potValue, 256, 1023, 30, 70);
+  }
+
+  displayNormalMode(setTemperature, temperature, humidity);
+
+  if (setTemperature != -1) {
+    if (temperature <= setTemperature - 3) {
+      digitalWrite(RELAY_PIN, HIGH); // Liga o relé
+    } else if (temperature >= setTemperature + 3) {
+      digitalWrite(RELAY_PIN, LOW); // Desliga o relé
+    }
+// Alteração futura para presets de acordo com o filamento que será usado.
+    if (humidity > 20.0) { // A umidade está acima de 35%, liga o cooler
+      digitalWrite(COOLER_PIN, HIGH); // Liga o cooler (via MOSFET)
+    } else {
+      digitalWrite(COOLER_PIN, LOW); // Desliga o cooler
+    }
+  }
+
+  delay(100);
+}
+
+void displayNormalMode(int setTemp, float currentTemp, float hum) {
+  display.clearDisplay();
+  display.setCursor(0, 0);
+
+  if (millis() - lastToggleTime > toggleInterval) {
+    showTemperature = !showTemperature;
+    lastToggleTime = millis();
+  }
+
+  if (showTemperature) {
+    display.print("Temp: ");
+    display.print(currentTemp);
+    display.print("C");
+  } else {
+    display.print("Umid: ");
+    display.print(hum);
+    display.print("%");
+  }
+
+  display.setCursor(0, 16);
+  if (setTemp == -1) {
+    display.print("Desligado");
+  } else {
+    display.print("Set: ");
+    display.print(setTemp);
+    display.print("C");
+  }
+  display.display();
+}
