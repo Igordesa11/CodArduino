@@ -3,6 +3,7 @@
 #include <DHT.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_GFX.h>
+#include <Sodaq_wdt.h> // Biblioteca para o Watchdog Timer
 
 // Definindo os pinos
 #define DHTPIN 2           // Pino para o sensor DHT22
@@ -57,27 +58,37 @@ void setup() {
   display.print("Aquecedor");
   display.display();
   delay(2000);
+
+  // Habilita o Watchdog Timer (8 segundos)
+  sodaq_wdt_enable(WDT_PERIOD_8X);
 }
 
 void loop() {
+  sodaq_wdt_reset(); // Reseta o Watchdog Timer
+
   static unsigned long lastDHTReadTime = 0;
 
-  // Reinicializa o DHT22 a cada 15 minutos, estou tendo problemas em longas durações onde ocorre um erro e sou obrigado a reiniciar manualmente o dht22.
+  // Reinicializa o DHT22 a cada 15 minutos
   if (millis() - lastDHTPowerCycle >= powerCycleInterval) {
     digitalWrite(DHT_GND_PIN, HIGH); // Desliga o GND do sensor
-    delay(1000);                      // Aguarda 1 segundo
+    delay(1000);                     // Aguarda 1 segundo
     digitalWrite(DHT_GND_PIN, LOW);  // Liga o GND do sensor
-    delay(2000);                      // Aguarda o sensor reiniciar
+    delay(5000);                     // Aguarda 5 segundos para reiniciar completamente
     dht.begin();
     lastDHTPowerCycle = millis();
   }
 
-  // Leitura do DHT22
-  if (millis() - lastDHTReadTime >= 2000) {
+  // Leitura do DHT22 a cada 5 segundos
+  if (millis() - lastDHTReadTime >= 5000) {
     temperature = dht.readTemperature();
     humidity = dht.readHumidity();
     if (isnan(temperature) || isnan(humidity)) {
       Serial.println("Falha ao ler o sensor DHT22");
+    } else {
+      Serial.print("Temp: ");
+      Serial.print(temperature);
+      Serial.print(" Hum: ");
+      Serial.println(humidity);
     }
     lastDHTReadTime = millis();
   }
@@ -100,11 +111,10 @@ void loop() {
     } else if (temperature >= setTemperature + 3) {
       digitalWrite(RELAY_PIN, LOW); // Desliga o relé
     }
-// Alteração futura para presets de acordo com o filamento que será usado.
-    if (humidity > 20.0) { // A umidade está acima de 35%, liga o cooler
-      digitalWrite(COOLER_PIN, HIGH); // Liga o cooler (via MOSFET)
+    if (humidity > 20.0) { // Liga o cooler se a umidade for maior que 20%
+      digitalWrite(COOLER_PIN, HIGH); 
     } else {
-      digitalWrite(COOLER_PIN, LOW); // Desliga o cooler
+      digitalWrite(COOLER_PIN, LOW); 
     }
   }
 
